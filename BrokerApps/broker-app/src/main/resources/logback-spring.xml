@@ -1,0 +1,97 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Log files are split by category under ${LOG_ROOT}:
+    application/  everything (full log)
+    sync/         periodic syncs and snapshot cleanup     (logger "broker.sync")
+    orders/       every place / modify / cancel request    (logger "broker.orders")
+    api/          logins and broker API errors             (logger "broker.api")
+    errors/       WARN and ERROR from anywhere
+  Folder, retention and file size come from logging.properties.
+  Files older than log.max-history days are deleted at startup and at each daily rollover.
+-->
+<configuration>
+	<include resource="org/springframework/boot/logging/logback/defaults.xml"/>
+	<include resource="org/springframework/boot/logging/logback/console-appender.xml"/>
+
+	<springProperty name="LOG_ROOT" source="log.dir" defaultValue="logs"/>
+	<springProperty name="MAX_HISTORY" source="log.max-history" defaultValue="7"/>
+	<springProperty name="MAX_FILE_SIZE" source="log.max-file-size" defaultValue="10MB"/>
+
+	<property name="FILE_PATTERN" value="%d{yyyy-MM-dd HH:mm:ss.SSS} %-5level [%thread] %logger{36} : %msg%n"/>
+	<property name="CATEGORY_PATTERN" value="%d{yyyy-MM-dd HH:mm:ss.SSS} %-5level : %msg%n"/>
+
+	<appender name="APPLICATION" class="ch.qos.logback.core.rolling.RollingFileAppender">
+		<file>${LOG_ROOT}/application/application.log</file>
+		<rollingPolicy class="ch.qos.logback.core.rolling.SizeAndTimeBasedRollingPolicy">
+			<fileNamePattern>${LOG_ROOT}/application/application-%d{yyyy-MM-dd}.%i.log</fileNamePattern>
+			<maxFileSize>${MAX_FILE_SIZE}</maxFileSize>
+			<maxHistory>${MAX_HISTORY}</maxHistory>
+			<cleanHistoryOnStart>true</cleanHistoryOnStart>
+		</rollingPolicy>
+		<encoder><pattern>${FILE_PATTERN}</pattern></encoder>
+	</appender>
+
+	<appender name="SYNC" class="ch.qos.logback.core.rolling.RollingFileAppender">
+		<file>${LOG_ROOT}/sync/sync.log</file>
+		<rollingPolicy class="ch.qos.logback.core.rolling.SizeAndTimeBasedRollingPolicy">
+			<fileNamePattern>${LOG_ROOT}/sync/sync-%d{yyyy-MM-dd}.%i.log</fileNamePattern>
+			<maxFileSize>${MAX_FILE_SIZE}</maxFileSize>
+			<maxHistory>${MAX_HISTORY}</maxHistory>
+			<cleanHistoryOnStart>true</cleanHistoryOnStart>
+		</rollingPolicy>
+		<encoder><pattern>${CATEGORY_PATTERN}</pattern></encoder>
+	</appender>
+
+	<appender name="ORDERS" class="ch.qos.logback.core.rolling.RollingFileAppender">
+		<file>${LOG_ROOT}/orders/orders.log</file>
+		<rollingPolicy class="ch.qos.logback.core.rolling.SizeAndTimeBasedRollingPolicy">
+			<fileNamePattern>${LOG_ROOT}/orders/orders-%d{yyyy-MM-dd}.%i.log</fileNamePattern>
+			<maxFileSize>${MAX_FILE_SIZE}</maxFileSize>
+			<maxHistory>${MAX_HISTORY}</maxHistory>
+			<cleanHistoryOnStart>true</cleanHistoryOnStart>
+		</rollingPolicy>
+		<encoder><pattern>${CATEGORY_PATTERN}</pattern></encoder>
+	</appender>
+
+	<appender name="API" class="ch.qos.logback.core.rolling.RollingFileAppender">
+		<file>${LOG_ROOT}/api/api.log</file>
+		<rollingPolicy class="ch.qos.logback.core.rolling.SizeAndTimeBasedRollingPolicy">
+			<fileNamePattern>${LOG_ROOT}/api/api-%d{yyyy-MM-dd}.%i.log</fileNamePattern>
+			<maxFileSize>${MAX_FILE_SIZE}</maxFileSize>
+			<maxHistory>${MAX_HISTORY}</maxHistory>
+			<cleanHistoryOnStart>true</cleanHistoryOnStart>
+		</rollingPolicy>
+		<encoder><pattern>${CATEGORY_PATTERN}</pattern></encoder>
+	</appender>
+
+	<appender name="ERRORS" class="ch.qos.logback.core.rolling.RollingFileAppender">
+		<filter class="ch.qos.logback.classic.filter.ThresholdFilter">
+			<level>WARN</level>
+		</filter>
+		<file>${LOG_ROOT}/errors/errors.log</file>
+		<rollingPolicy class="ch.qos.logback.core.rolling.SizeAndTimeBasedRollingPolicy">
+			<fileNamePattern>${LOG_ROOT}/errors/errors-%d{yyyy-MM-dd}.%i.log</fileNamePattern>
+			<maxFileSize>${MAX_FILE_SIZE}</maxFileSize>
+			<maxHistory>${MAX_HISTORY}</maxHistory>
+			<cleanHistoryOnStart>true</cleanHistoryOnStart>
+		</rollingPolicy>
+		<encoder><pattern>${FILE_PATTERN}</pattern></encoder>
+	</appender>
+
+	<!-- Category loggers also flow to the root appenders (console, application, errors). -->
+	<logger name="broker.sync" level="INFO">
+		<appender-ref ref="SYNC"/>
+	</logger>
+	<logger name="broker.orders" level="INFO">
+		<appender-ref ref="ORDERS"/>
+	</logger>
+	<logger name="broker.api" level="INFO">
+		<appender-ref ref="API"/>
+	</logger>
+
+	<root level="INFO">
+		<appender-ref ref="CONSOLE"/>
+		<appender-ref ref="APPLICATION"/>
+		<appender-ref ref="ERRORS"/>
+	</root>
+</configuration>

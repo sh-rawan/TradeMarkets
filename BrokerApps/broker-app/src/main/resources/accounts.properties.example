@@ -1,0 +1,27 @@
+# All your broker accounts in one place. Copy to accounts.properties (git-ignored) and fill in.
+#
+# accounts.<name>.broker   = ZERODHA or ANGELONE
+# accounts.<name>.enabled  = false to switch an account off (default true)
+# <name> is yours to choose (letters, digits, dashes) and is used in the API: /api/accounts/<name>/holdings
+
+# --- Zerodha: needs a Kite Connect app per account (https://developers.kite.trade)
+#     with Redirect URL http://localhost:8091/api/kite/callback. Log in daily at /api/accounts/<name>/login.
+accounts.acc1.broker=ZERODHA
+accounts.acc1.api-key=
+accounts.acc1.api-secret=
+
+accounts.acc2.broker=ZERODHA
+accounts.acc2.api-key=
+accounts.acc2.api-secret=
+
+# --- Angel One: needs a SmartAPI app (https://smartapi.angelone.in) and TOTP enabled on the account.
+#     Logs in by itself - no daily login.
+#     client-id   = your Angel client code
+#     pin         = your MPIN
+#     totp-secret = the text code shown under the QR when you enable TOTP (the one you'd type into an
+#                   authenticator app)
+accounts.acc3.broker=ANGELONE
+accounts.acc3.api-key=
+accounts.acc3.client-id=
+accounts.acc3.pin=
+accounts.acc3.totp-secret=

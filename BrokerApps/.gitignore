@@ -1,0 +1,24 @@
+# Build output
+target/
+.mvn/wrapper/maven-wrapper.jar
+*.class
+
+# Secrets: DB password + encryption key, and broker account keys - see the *.example files
+**/src/main/resources/secrets.properties
+**/src/main/resources/accounts.properties
+
+# IDE
+.idea/
+*.iml
+.vscode/
+.classpath
+.project
+.settings/
+.factorypath
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
