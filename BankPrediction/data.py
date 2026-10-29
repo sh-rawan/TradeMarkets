@@ -29,6 +29,8 @@ def download_all(start=START):
         write(_download(symbol, start).reset_index(), snap / f"{symbol}.parquet")
         print(f"  {symbol}")
     build_curated(snap)
+    import nse
+    nse.download(calendar())
     if not INDIA_10Y_CSV.exists():
         print(f"  (optional) add India 10Y yields at {INDIA_10Y_CSV} for the rate features")
 

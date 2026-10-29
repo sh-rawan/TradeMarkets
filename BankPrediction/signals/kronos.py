@@ -4,13 +4,15 @@ import numpy as np
 import pandas as pd
 from tqdm import tqdm
 
-from config import CONTEXT_LEN, ENTRY_LAG, KRONOS_DIR, KRONOS_MODEL, KRONOS_SAMPLES, KRONOS_TOKENIZER
+from config import (CONTEXT_LEN, ENTRY_LAG, KRONOS_BATCH, KRONOS_DIR, KRONOS_MODEL, KRONOS_SAMPLES,
+                    KRONOS_TOKENIZER)
 from data import load_prices
 
 
 def kronos_signal(dates, horizons):
-    """Kronos zero-shot candlestick forecast (mean of KRONOS_SAMPLES sampled paths).
-    Value = forecast log return over the holding period."""
+    """Kronos zero-shot candlestick forecast. Kronos samples future candles like a language
+    model samples words; each bank gets KRONOS_SAMPLES independent paths, and the mean and std
+    dev of the holding-period log return across those paths are the forecast."""
     if not KRONOS_DIR.exists():
         raise RuntimeError(f"Clone https://github.com/shiyu-coder/Kronos into {KRONOS_DIR}")
     sys.path.insert(0, str(KRONOS_DIR))
@@ -40,10 +42,19 @@ def kronos_signal(dates, horizons):
         if not banks:
             continue
         y_ts = pd.Series(pd.bdate_range(d + pd.offsets.BDay(1), periods=steps))
-        preds = predictor.predict_batch(xs, x_ts, [y_ts] * len(banks), pred_len=steps, T=1.0,
-                                        top_p=0.9, sample_count=KRONOS_SAMPLES, verbose=False)
-        for bank, x, pred in zip(banks, xs, preds):
-            path = np.log(np.concatenate([[x["close"].iloc[-1]], pred["close"].values]))
+        # predict_batch averages its own samples, so each bank is repeated instead: every copy
+        # is one independent sampled path.
+        reps = [i for i in range(len(banks)) for _ in range(KRONOS_SAMPLES)]
+        closes = []
+        for start in range(0, len(reps), KRONOS_BATCH):
+            chunk = reps[start:start + KRONOS_BATCH]
+            preds = predictor.predict_batch([xs[i] for i in chunk], [x_ts[i] for i in chunk], [y_ts] * len(chunk),
+                                            pred_len=steps, T=1.0, top_p=0.9, sample_count=1, verbose=False)
+            closes += [p["close"].values for p in preds]
+        for i, (bank, x) in enumerate(zip(banks, xs)):
+            paths = np.log(np.array(closes[i * KRONOS_SAMPLES:(i + 1) * KRONOS_SAMPLES]))
+            paths = np.column_stack([np.full(len(paths), np.log(x["close"].iloc[-1])), paths])
             for h in horizons:
-                rows.append((d, bank, h, path[ENTRY_LAG + h] - path[ENTRY_LAG]))
-    return pd.DataFrame(rows, columns=["date", "ticker", "horizon", "value"])
+                r = paths[:, ENTRY_LAG + h] - paths[:, ENTRY_LAG]
+                rows.append((d, bank, h, r.mean(), r.std(ddof=1)))
+    return pd.DataFrame(rows, columns=["date", "ticker", "horizon", "mean", "std"])

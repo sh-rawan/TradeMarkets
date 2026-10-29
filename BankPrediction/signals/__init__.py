@@ -1,6 +1,6 @@
-"""Each signal function takes (dates, horizons) and returns a long frame
-[date, ticker, horizon, value]. Return models give a forecast log return over the holding
-period; "egarch" gives a forecast volatility over it."""
+"""Each model takes (dates, horizons) and returns a long frame [date, ticker, horizon, mean, std]:
+the forecast distribution of the log return over the holding period (enter at close
+t+ENTRY_LAG, hold h days), summarised by its mean and standard deviation."""
 from importlib import import_module
 
 import pandas as pd
@@ -9,14 +9,15 @@ from config import SIGNALS_DIR
 from store import write
 
 REGISTRY = {
+    "historical": ("signals.baseline", "historical"),
     "reversal": ("signals.baseline", "reversal"),
     "resid_reversal": ("signals.baseline", "resid_reversal"),
-    "random": ("signals.baseline", "random_signal"),
-    "egarch": ("signals.egarch", "egarch_vol"),
+    "egarch": ("signals.egarch", "egarch"),
+    "lgbm": ("signals.lgbm", "lgbm"),
     "chronos": ("signals.chronos", "chronos_signal"),
     "kronos": ("signals.kronos", "kronos_signal"),
 }
-COLUMNS = ["date", "ticker", "horizon", "value"]
+COLUMNS = ["date", "ticker", "horizon", "mean", "std"]
 
 
 def get(name):
@@ -30,13 +31,15 @@ def cache_path(name):
 
 def load_cached(name):
     path = cache_path(name)
-    if not path.exists():
+    cached = pd.read_parquet(path) if path.exists() else None
+    # Caches from before the switch to distribution forecasts hold a single value column.
+    if cached is None or not set(COLUMNS) <= set(cached.columns):
         return pd.DataFrame(columns=COLUMNS)
-    return pd.read_parquet(path)
+    return cached
 
 
 def compute(name, dates, horizons, refresh=False):
-    """Compute the signal for dates not already cached, append, and return the full cache."""
+    """Compute the forecast for dates not already cached, append, and return the full cache."""
     cached = pd.DataFrame(columns=COLUMNS) if refresh else load_cached(name)
     todo = pd.DatetimeIndex(dates).difference(pd.DatetimeIndex(cached["date"].unique()))
     if len(todo):
@@ -49,8 +52,11 @@ def compute(name, dates, horizons, refresh=False):
     return cached
 
 
-def to_long(wide, horizons):
-    """Broadcast a horizon-independent (date x ticker) frame to the long format."""
-    long = wide.stack().rename("value").reset_index()
-    long.columns = ["date", "ticker", "value"]
-    return pd.concat([long.assign(horizon=h) for h in horizons], ignore_index=True)
+def to_long(by_horizon):
+    """{horizon: (mean, std)} of (date x ticker) frames -> the long format."""
+    frames = []
+    for h, (mean, std) in by_horizon.items():
+        df = pd.concat({"mean": mean.stack(), "std": std.stack()}, axis=1).dropna()
+        df.index.names = ["date", "ticker"]
+        frames.append(df.reset_index().assign(horizon=h))
+    return pd.concat(frames, ignore_index=True)[COLUMNS]

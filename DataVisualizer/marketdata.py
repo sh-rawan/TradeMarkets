@@ -8,6 +8,7 @@ from pathlib import Path
 
 import duckdb
 import pandas as pd
+import pyarrow.parquet as pq
 
 DATA_ROOT = Path(os.environ.get("MARKETDATA_ROOT", Path.home() / "MarketData"))
 CURATED = DATA_ROOT / "curated"
@@ -16,10 +17,12 @@ FEATURES = DATA_ROOT / "features"
 PRICES = CURATED / "prices_daily.parquet"              # date, ticker, open, high, low, close, volume
 MACRO = CURATED / "macro_daily.parquet"                # date, series, value
 TICKERS = CURATED / "tickers.parquet"                  # ticker, group
-SIGNALS_DIR = FEATURES / "signals"                     # <model>.parquet: date, ticker, horizon, value
-ENSEMBLE = FEATURES / "ensemble.parquet"               # date, ticker, horizon, score
+SIGNALS_DIR = FEATURES / "signals"                     # <model>.parquet: raw model output: date, ticker, horizon, mean, std
+FORECASTS_DIR = FEATURES / "forecasts"                 # <model>.parquet: calibrated Student-t: date, ticker, horizon, mean, std, nu
+ENSEMBLE = FORECASTS_DIR / "ensemble.parquet"          # the combined forecast, same columns
 ENSEMBLE_WEIGHTS = FEATURES / "ensemble_weights.parquet"  # date, model, horizon, weight
 EVALUATION = FEATURES / "evaluation.parquet"           # horizon, model, metrics...
+OUTCOMES = FEATURES / "outcomes.parquet"               # date, ticker, horizon, entry/exit dates, actual returns
 YAHOO_DAILY = DATA_ROOT / "raw" / "yahoo" / "daily"
 
 
@@ -62,3 +65,26 @@ def views_available(con):
 
 def load_parquet(path):
     return pd.read_parquet(path) if Path(path).exists() else None
+
+
+def files():
+    """Every Parquet file in the store, with its modification time (a cache key for catalog())."""
+    return tuple((p.relative_to(DATA_ROOT).as_posix(), p.stat().st_mtime)
+                 for p in sorted(DATA_ROOT.rglob("*.parquet")))
+
+
+def catalog():
+    """One row per store table: where it lives, its size, and the dates it covers."""
+    rows = []
+    for rel, mtime in files():
+        path = DATA_ROOT / rel
+        meta = pq.ParquetFile(path).metadata
+        cols = meta.schema.names
+        first = last = None
+        if "date" in cols:
+            first, last = duckdb.sql(f"select min(date), max(date) from {table(path)}").fetchall()[0]
+        rows.append({"table": rel.removesuffix(".parquet"), "layer": rel.split("/")[0],
+                     "rows": meta.num_rows, "columns": len(cols), "size_kb": path.stat().st_size / 1024,
+                     "first_date": first, "last_date": last,
+                     "updated": pd.Timestamp.fromtimestamp(mtime)})
+    return pd.DataFrame(rows)

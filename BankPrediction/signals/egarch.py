@@ -23,10 +23,10 @@ def _ewma_var(r, lam=0.94):
     return float((r ** 2).ewm(alpha=1 - lam).mean().iloc[-1])
 
 
-def egarch_vol(dates, horizons, window=1000, simulations=500):
-    """EGARCH(1,1,1) with Student-t errors, refit at each date on a rolling window, falling
-    back to GJR-GARCH(1,1,1)-t when the EGARCH fit is degenerate.
-    Value = forecast std dev of the log return over the holding period."""
+def egarch(dates, horizons, window=1000, simulations=500):
+    """EGARCH(1,1,1) with Student-t errors and a constant mean, refit at each date on a rolling
+    window, falling back to GJR-GARCH(1,1,1)-t when the EGARCH fit is degenerate.
+    Mean = the fitted daily mean times h; std = the forecast std dev over the holding period."""
     from arch import arch_model
 
     rets = 100 * np.log(load_panel("close")).diff()
@@ -44,18 +44,20 @@ def egarch_vol(dates, horizons, window=1000, simulations=500):
                 if not _plausible(res, r):
                     fallbacks["gjr"] += 1
                     res = arch_model(r, mean="Constant", vol="GARCH", p=1, o=1, q=1, dist="t").fit(disp="off")
+                mu = res.params["mu"]
                 if _plausible(res, r):
                     paths = res.forecast(horizon=steps, method="simulation", simulations=simulations,
                                          reindex=False).simulations.variances[-1]
                 else:
                     fallbacks["ewma"] += 1
                     paths = np.full((1, steps), _ewma_var(r))
+                    mu = r.mean()
             # paths[:, k] is the simulated variance of the return on day t+1+k; the holding
             # period is days t+ENTRY_LAG+1 .. t+ENTRY_LAG+h. Median across paths, because with
             # fat-tailed t errors a few simulated EGARCH paths explode and swamp the mean.
             for h in horizons:
                 var = np.median(paths[:, ENTRY_LAG:ENTRY_LAG + h].sum(axis=1))
-                rows.append((d, bank, h, np.sqrt(var) / 100))
+                rows.append((d, bank, h, h * mu / 100, np.sqrt(var) / 100))
     print(f"egarch: of {len(rows) // len(horizons)} fits, {fallbacks['gjr']} fell back to "
           f"GJR-GARCH and {fallbacks['ewma']} to EWMA")
-    return pd.DataFrame(rows, columns=["date", "ticker", "horizon", "value"])
+    return pd.DataFrame(rows, columns=["date", "ticker", "horizon", "mean", "std"])
