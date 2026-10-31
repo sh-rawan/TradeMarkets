@@ -1,7 +1,9 @@
-"""Read-only access to the shared MarketData store (Parquet files queried with DuckDB).
+"""Read-only access to the shared MarketData store (Parquet files queried with DuckDB), and to
+BankPrediction's published model outputs.
 
-Projects such as BankPrediction write into the store; this app only reads it, so it never
-depends on any project's code. Point it at another store with MARKETDATA_ROOT.
+The store holds market data only. Model outputs (signals, forecasts, outcomes, scores) live in
+BankPrediction/output. This app only reads files, so it never depends on any project's code.
+Point it elsewhere with MARKETDATA_ROOT and PREDICTIONS_ROOT.
 """
 import os
 from pathlib import Path
@@ -12,11 +14,15 @@ import pyarrow.parquet as pq
 
 DATA_ROOT = Path(os.environ.get("MARKETDATA_ROOT", Path.home() / "MarketData"))
 CURATED = DATA_ROOT / "curated"
-FEATURES = DATA_ROOT / "features"
+FEATURES = Path(os.environ.get("PREDICTIONS_ROOT", Path(__file__).resolve().parent.parent / "BankPrediction" / "output"))
 
 PRICES = CURATED / "prices_daily.parquet"              # date, ticker, open, high, low, close, volume
 MACRO = CURATED / "macro_daily.parquet"                # date, series, value
 TICKERS = CURATED / "tickers.parquet"                  # ticker, group
+TAGS = CURATED / "stock_tags.parquet"                  # ticker, kind, tag (size, sector, theme...)
+FUNDAMENTALS = CURATED / "fundamentals.parquet"        # ticker, view, statement, item, date, value (screener.in)
+COMPANIES = CURATED / "companies.parquet"              # ticker, broad_sector, sector, broad_industry, industry
+STOCKS = CURATED / "stocks_daily.parquet"              # date, ticker, series, open...close, adj_close, volume (NSE)
 SIGNALS_DIR = FEATURES / "signals"                     # <model>.parquet: raw model output: date, ticker, horizon, mean, std
 FORECASTS_DIR = FEATURES / "forecasts"                 # <model>.parquet: calibrated Student-t: date, ticker, horizon, mean, std, nu
 ENSEMBLE = FORECASTS_DIR / "ensemble.parquet"          # the combined forecast, same columns

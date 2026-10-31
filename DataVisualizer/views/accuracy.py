@@ -60,9 +60,12 @@ st.caption("Every model forecasts a **distribution** for each bank's return over
            "returns land inside its 68% range and 95% inside its 95% range.")
 
 f1, f2 = st.columns([3, 2])
-model = f1.selectbox("Model", list(fcs), format_func=lambda m: LABELS.get(m, m))
+models = list(fcs)
+model = f1.selectbox("Model", models, index=models.index("lgbm") if "lgbm" in models else 0,
+                     format_func=lambda m: LABELS.get(m, m))
 horizons = sorted(outcomes["horizon"].unique().tolist())
-h = f2.segmented_control("Horizon (trading days)", horizons, default=horizons[0]) or horizons[0]
+h0 = 7 if 7 in horizons else horizons[0]
+h = f2.segmented_control("Horizon (trading days)", horizons, default=h0) or h0
 
 df = scored(fcs[model], outcomes, h)
 known = df.dropna(subset=["actual"])
@@ -92,20 +95,38 @@ k[3].metric("Forecasts checked", f"{len(known):,}", f"{pending} dates pending" i
 st.markdown("#### One forecast date, checked")
 dates = sorted(df["date"].unique(), reverse=True)
 known_dates = set(stats.index)
-default = next((i for i, d in enumerate(dates) if d in known_dates), 0)
-d = st.selectbox("Forecast made after the close on", dates, index=default,
-                 format_func=lambda x: f"{x:%a %d %b %Y}" + ("" if x in known_dates else " · pending"))
+if st.session_state.get("forecast_date") not in dates:
+    st.session_state["forecast_date"] = next((x for x in dates if x in known_dates), dates[0])
+
+
+def step(by):
+    """Move the shown forecast date: +1 = later, -1 = earlier (dates are newest first)."""
+    i = dates.index(st.session_state["forecast_date"]) - by
+    st.session_state["forecast_date"] = dates[min(max(i, 0), len(dates) - 1)]
+
+
+d = st.session_state["forecast_date"]
+# The same axis, -10% to +10%, for every date, so zero stays put and widths compare while stepping.
+edge = 0.10
 day = df[df["date"] == d].set_index("ticker").sort_values("mean", ascending=False)
 if d in known_dates:
     st.caption(f"Held from the close of {day['entry_date'].iloc[0]:%d %b} to {day['exit_date'].iloc[0]:%d %b %Y}. "
                f"**{int(day['inside_68'].sum())} of {len(day)}** actual returns landed inside the 68% range and "
                f"**{int(day['inside_95'].sum())} of {len(day)}** inside the 95% range.")
-    fig = intervals(day["mean"], day["std"], day["nu"], day["actual"])
+    fig = intervals(day["mean"], day["std"], day["nu"], day["actual"], xrange=[-edge, edge])
 else:
     st.caption("The holding period hasn't finished yet, so this shows the forecast only.")
-    fig = intervals(day["mean"], day["std"], day["nu"])
+    fig = intervals(day["mean"], day["std"], day["nu"], xrange=[-edge, edge])
 show(fig, day[["mean", "std", "nu", "actual", "z"]].round(4), "this forecast",
      f"{LABELS.get(model, model)}: {h}-day return forecast (mean, 68% and 95% ranges) vs actual")
+i = dates.index(d)
+nav = st.columns([1, 4, 1], vertical_alignment="center")
+nav[0].button("◀ Earlier", on_click=step, args=(-1,), disabled=i == len(dates) - 1, use_container_width=True)
+# Arrows step one date; the dropdown jumps straight to any date. Both share the same state.
+nav[1].selectbox("Forecast made after the close on", dates, key="forecast_date",
+                 format_func=lambda x: f"{x:%a %d %b %Y}" + ("" if x in known_dates else " · pending"),
+                 help=f"{len(dates) - i} of {len(dates)} forecast dates, newest first")
+nav[2].button("Later ▶", on_click=step, args=(1,), disabled=i == 0, use_container_width=True)
 
 # --- One bank over time ------------------------------------------------------------------------
 st.markdown("#### One bank over time")

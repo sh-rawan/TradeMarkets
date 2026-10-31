@@ -1,0 +1,117 @@
+<script src="https://cdn.plot.ly/plotly-2.35.2.min.js"></script>
+<style>
+  body { margin: 0; font-family: system-ui, -apple-system, "Segoe UI", sans-serif; }
+  #summary { font-size: 14px; margin: 6px 0 2px 64px; min-height: 40px; }
+  #summary b { font-weight: 600; }
+</style>
+<div id="top" style="height:380px"></div>
+<div id="summary"></div>
+<div id="bottom" style="height:400px"></div>
+<script>
+const D = __DATA__, C = D.colors, n = D.date.length;
+document.getElementById("summary").style.color = C.text2;
+const font = {family: 'system-ui, -apple-system, "Segoe UI", sans-serif', size: 13, color: C.text2};
+const base = {paper_bgcolor: "rgba(0,0,0,0)", plot_bgcolor: "rgba(0,0,0,0)", font: font,
+  margin: {l: 64, r: 16, t: 30, b: 30}, hovermode: "x unified",
+  legend: {orientation: "h", x: 0, y: 1.02, yanchor: "bottom"},
+  hoverlabel: {bgcolor: C.surface, bordercolor: C.grid, font: {color: C.text}},
+  xaxis: {showgrid: false, linecolor: C.axis, tickfont: {color: C.muted}, showspikes: true, spikemode: "across",
+          spikethickness: 1, spikecolor: C.muted, spikedash: "solid", spikesnap: "cursor"},
+  yaxis: {gridcolor: C.grid, tickfont: {color: C.muted}, zeroline: true, zerolinecolor: C.axis}};
+const cfg = {displaylogo: false, responsive: true};
+const pct = v => (v >= 0 ? "+" : "") + (100 * v).toFixed(1) + "%";
+const rupees = v => "₹" + Math.round(v).toLocaleString("en-IN");
+const nice = d => new Date(d).toLocaleDateString("en-GB", {day: "numeric", month: "short", year: "numeric"});
+const short = v => v >= 1e5 ? "₹" + Number((v / 1e5).toFixed(2)) + "L" : "₹" + Math.round(v / 1e3) + "k";
+// Money put in on each forecast date, out of the chosen amount (0 = stayed in cash), shown by the
+// marker's shape: circle = all of it, square = half, triangle = a quarter, small hollow circle = cash.
+const putIn = D.size.map((k, i) => D.banks[i] > 0 && k !== null ? k * D.amount : 0);
+const SHAPES = [[1, "circle"], [0.5, "square"], [0.25, "triangle-up"]];
+const shape = putIn.map(v => v ? (SHAPES.find(([k]) => Math.abs(v - k * D.amount) < 1) || [0, "diamond"])[1] : "circle-open");
+const msize = putIn.map(v => v ? 8 : 5);
+
+Plotly.newPlot("top", [
+  {x: D.date, y: D.expected, name: "Expected", mode: "lines+markers", line: {color: C.exp, width: 2},
+   marker: {size: msize, symbol: shape}, customdata: D.banks.map((b, i) => [b, b ? short(putIn[i]) + " invested" : "in cash"]),
+   hovertemplate: "<b>%{y:+.2%}</b> expected · %{customdata[0]} banks · %{customdata[1]}<extra></extra>"},
+  {x: D.date, y: D.actual, name: "Actual", mode: "lines+markers", line: {color: C.act, width: 2},
+   marker: {size: msize, symbol: shape}, hovertemplate: "<b>%{y:+.2%}</b> actual<extra></extra>"},
+  // Legend-only entries that explain the shapes.
+  ...SHAPES.map(([k, sym]) => ({x: [null], y: [null], name: short(k * D.amount) + " put in", mode: "markers",
+    marker: {symbol: sym, size: 9, color: C.muted}, hoverinfo: "skip"})),
+  {x: [null], y: [null], name: "in cash", mode: "markers", marker: {symbol: "circle-open", size: 7, color: C.muted}, hoverinfo: "skip"}],
+  {...base, yaxis: {...base.yaxis, tickformat: "+.0%"}}, cfg);
+
+// Reinvest everything trade after trade, starting at forecast i. Forecasts made while a trade is
+// still open are skipped; a forecast with nothing to buy leaves the money in cash.
+// The line stays flat while the money waits in cash. Also returns the trades' periods.
+function compound(ret, i, invested) {
+  let money = D.amount, x = [D.entry[i]], y = [money], periods = [], note = ["in cash"];
+  while (i < n && D.actual[i] !== null) {
+    if (!invested(i)) { i++; continue; }
+    if (x[x.length - 1] !== D.entry[i]) { x.push(D.entry[i]); y.push(money); note.push("in cash"); }
+    note.push(rupees(money * D.size[i]) + " was in this trade (" + Math.round(100 * D.size[i]) + "% of the money)");
+    money *= 1 + ret[i];
+    x.push(D.exit[i]); y.push(money);
+    periods.push({entry: D.entry[i], exit: D.exit[i], size: D.size[i]});
+    const out = D.exit[i];
+    while (i < n && D.entry[i] < out) i++;
+  }
+  return {x, y, periods, note};
+}
+
+// The same money in the Bank Nifty index, but only while the strategy is invested and with the
+// same share of the money: bought at each trade's entry close, sold at its exit close, flat in between.
+const bnAt = Object.fromEntries(D.bn_date.map((d, k) => [d, D.bn[k]]));
+function bankNifty(periods, start, end) {
+  let base = D.amount, p = 0, x = [], y = [];
+  for (let k = 0; k < D.bn.length; k++) {
+    const d = D.bn_date[k];
+    if (d < start) continue;
+    if (d > end) break;
+    while (p < periods.length && periods[p].exit < d) p++;
+    const t = periods[p];
+    let value = base;
+    if (t && t.entry < d && d <= t.exit && bnAt[t.entry]) {
+      value = base * (1 - t.size) + base * t.size * D.bn[k] / bnAt[t.entry];
+      if (d === t.exit) base = value;
+    }
+    x.push(d); y.push(value);
+  }
+  return {x, y};
+}
+
+let shown = -1;
+function draw(i) {
+  if (i === shown || i < 0 || i >= n) return;
+  shown = i;
+  const summary = document.getElementById("summary");
+  if (D.actual[i] === null) {
+    summary.innerHTML = "This trade hasn't finished yet: move the cursor further left.";
+    return;
+  }
+  const strat = compound(D.actual, i, k => D.banks[k] > 0);
+  const last = a => a.y[a.y.length - 1];
+  const trades = strat.periods.length;
+  // The strategy's money is known up to the last finished trade from any start.
+  const end = trades ? strat.x[strat.x.length - 1] : D.exit.filter((e, k) => D.actual[k] !== null).pop();
+  const bank = bankNifty(strat.periods, D.entry[i], end);
+  summary.innerHTML =
+    "<b>" + rupees(D.amount) + "</b> invested at the close of " + nice(D.entry[i]) + " grows to <b style='color:" + C.text + "'>" +
+    rupees(last(strat)) + "</b> (" + pct(last(strat) / D.amount - 1) + ") by " + nice(end) + " over " + trades +
+    " trades. Bank Nifty instead, bought and sold on the same days with the same money: <b style='color:" + C.text + "'>" +
+    rupees(last(bank)) + "</b> (" + pct(last(bank) / D.amount - 1) + ").";
+  const line = (a, name, color, width) => ({x: a.x, y: a.y, name: name, mode: "lines", line: {color, width},
+    customdata: a.note, hovertemplate: "<b>₹%{y:,.0f}</b> " + name + (a.note ? " · %{customdata}" : "") + "<extra></extra>"});
+  Plotly.react("bottom", [
+    line(bank, "Bank Nifty, same days", C.bn, 2),
+    line(strat, "Strategy", C.act, 2.5)],
+    {...base, title: {text: "Your money, compounded from " + nice(D.entry[i]), font: {size: 14, color: C.text}, xref: "paper", x: 0, xanchor: "left"},
+     margin: {...base.margin, t: 60}, legend: {...base.legend, y: 1.0},
+     yaxis: {...base.yaxis, tickprefix: "₹", tickformat: ",.0f", zeroline: false}}, cfg);
+  Plotly.relayout("top", {shapes: [{type: "line", xref: "x", yref: "paper", x0: D.date[i], x1: D.date[i], y0: 0, y1: 1,
+                                    line: {color: C.muted, width: 1, dash: "dot"}}]});
+}
+document.getElementById("top").on("plotly_hover", ev => draw(ev.points[0].pointIndex));
+draw(D.start);
+</script>

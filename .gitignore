@@ -1,3 +1,26 @@
 # Log files
 logFiles/
 .vscode/
+.idea/
+
+# Python caches and tooling (every project)
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ipynb_checkpoints/
+
+# Secrets and local settings
+.env
+myIdeas.txt
+.streamlit/secrets.toml
+
+# Half-written files from interrupted runs
+*.tmp
+
+# OS clutter
+Thumbs.db
+desktop.ini
+.DS_Store
+
+# Model outputs (re-created by run.py)
+BankPrediction/output/

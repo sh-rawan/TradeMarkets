@@ -1,8 +1,9 @@
 # DataVisualizer
 
 Interactive dashboard over the shared **MarketData** store (Parquet files queried with
-DuckDB). It only reads the store. Projects such as [BankPrediction](../BankPrediction) write
-to it, so the visualizer never depends on their code.
+DuckDB), which holds market data only, and over the model outputs that
+[BankPrediction](../BankPrediction) publishes to its own `output/` folder. It only reads files,
+so the visualizer never depends on any project's code.
 
 ## Run (global Python 3.11)
 
@@ -11,21 +12,27 @@ python -m pip install -r requirements.txt
 python -m streamlit run app.py          # http://localhost:8501
 ```
 
-The store defaults to `C:\Users\<you>\MarketData`. Set `MARKETDATA_ROOT` to use another folder.
+The store defaults to `C:\Users\<you>\MarketData` (set `MARKETDATA_ROOT` to change it), and the
+model outputs to `../BankPrediction/output` (set `PREDICTIONS_ROOT`). In the tables below,
+`features/...` means a file in that output folder.
 The app re-reads a table whenever its file changes, so refreshing the browser after a new
 download or model run shows the new data.
 
 ## Pages
 
-**Data** (opens first) shows what is in the store:
+**Data → Market data** (opens first) charts every market data table in the store (`curated/`), one
+page per country (India, US, Europe & UK, Japan, China & HK, Korea/Taiwan/Brazil, commodities &
+crypto): pick a table and a value, and it draws one panel per stock / series / participant, each on
+its own scale. Tables that mix countries (markets and currencies, bond yields and rates, GDP) are
+split by series. New tables show up automatically.
 
-- an overview of every table, grouped into curated / features / raw, with its rows, columns, size, date range and last update
-- **Open a table** to browse its rows, newest first. Filter by date range and by any column with
-  few distinct values (ticker, series, model, horizon...), then download the result as CSV
-- **Columns**: each column's type, min, max, distinct count and missing share
-- **SQL**: ad-hoc DuckDB queries over the whole store
+**Data → Financials** shows one company the way its screener.in page does (`curated/fundamentals`):
+the company picker (each name with its verdict dot 🟢 🟡 🔴 and market cap), the verdict badge, the
+headline ratios, the price with its 200-day average, the investment categorizer below, then quarterly
+results, profit & loss, balance sheet, cash flows, ratios and shareholding as tables.
 
-New tables show up automatically: the page lists every Parquet file under the store.
+The verdicts and the rules behind them are explained in
+[documentations/investment_categorizer.md](../documentations/investment_categorizer.md).
 
 **Bank Nifty monitor**:
 
@@ -53,7 +60,8 @@ table view, and the app follows the system light/dark setting.
 ## Files
 
 - `app.py`: entry point and page navigation
-- `views/data.py`: the Data page
+- `views/data.py`: the Market data page
+- `views/financials.py`: the Financials page and the investment categorizer (`assess`)
 - `views/monitor.py`: the Bank Nifty monitor
 - `views/accuracy.py`: predictions vs actual
 - `charts.py`: shared light/dark design tokens and Plotly helpers

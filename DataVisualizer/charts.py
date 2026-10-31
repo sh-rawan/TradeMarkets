@@ -30,7 +30,37 @@ def theme():
 
 
 MACRO_LABELS = {"banknifty": "Bank Nifty", "nifty": "Nifty 50", "vix": "India VIX",
-                "usdinr": "USD/INR", "us10y": "US 10Y yield (%)", "in10y": "India 10Y yield (%)"}
+                "usdinr": "USD/INR", "us10y": "US 10Y yield (%)", "in10y": "India 10Y yield (%)",
+                "us3m": "US 3-month yield (%)", "spx": "S&P 500", "usvix": "US VIX", "dxy": "Dollar index (DXY)",
+                "brent": "Brent crude ($)", "gold": "Gold ($/oz)", "btc": "Bitcoin ($)",
+                "nasdaq": "Nasdaq", "hangseng": "Hang Seng", "shanghai": "Shanghai Composite", "usdcny": "USD/CNY",
+                "nikkei": "Nikkei 225", "usdjpy": "USD/JPY", "dax": "DAX", "ftse": "FTSE 100", "eurinr": "EUR/INR",
+                "kospi": "KOSPI (Korea)", "taiwan": "Taiwan", "brazil": "Brazil (Bovespa)", "em_etf": "Emerging markets ETF (EEM)",
+                "copper": "Copper ($/lb)", "natgas": "Natural gas ($)", "hy_bonds": "US high-yield bonds (HYG)",
+                "ig_bonds": "US investment-grade bonds (LQD)", "treasuries_7_10y": "US 7-10y Treasuries (IEF)",
+                # Bond yields and overnight rates (rates_daily), in percent.
+                "us_3m": "US 3-month (%)", "us_1y": "US 1-year (%)", "us_2y": "US 2-year (%)", "us_5y": "US 5-year (%)",
+                "us_10y": "US 10-year (%)", "us_30y": "US 30-year (%)", "us_real_5y": "US real 5-year (%)",
+                "us_real_10y": "US real 10-year (%)", "sofr": "SOFR (%)", "effr": "US Fed funds (%)",
+                "jp_1y": "Japan 1-year (%)", "jp_2y": "Japan 2-year (%)", "jp_5y": "Japan 5-year (%)",
+                "jp_10y": "Japan 10-year (%)", "jp_30y": "Japan 30-year (%)", "eu_2y": "Euro area 2-year (%)",
+                "eu_10y": "Euro area 10-year (%)", "estr": "€STR (%)", "uk_10y": "UK 10-year (%)",
+                "sonia": "SONIA (%)", "uk_bank_rate": "UK Bank Rate (%)",
+                "in_mibor_on": "India overnight MIBOR (%)", "in_mibor_14d": "India MIBOR 14-day (%)",
+                "in_mibor_1m": "India MIBOR 1-month (%)", "in_mibor_3m": "India MIBOR 3-month (%)",
+                "in_mror": "India market repo rate (%)", "in_sorr": "India secured overnight rate (%)",
+                "in_cd_14d": "India CD 14-day (%)", "in_cd_1m": "India CD 1-month (%)",
+                "in_cd_3m": "India CD 3-month (%)", "in_cd_6m": "India CD 6-month (%)",
+                "in_cd_12m": "India CD 12-month (%)", "in_tbill_14d": "India T-bill 14-day (%)",
+                "in_tbill_1m": "India T-bill 1-month (%)", "in_tbill_3m": "India T-bill 3-month (%)",
+                "in_tbill_6m": "India T-bill 6-month (%)", "in_tbill_12m": "India T-bill 12-month (%)"}
+# GDP series (DataCollector/gdp.py): <country>_<measure>.
+GDP_COUNTRIES = {"in": "India", "us": "US", "eu": "Euro area", "de": "Germany", "fr": "France", "uk": "UK",
+                 "jp": "Japan", "cn": "China", "hk": "Hong Kong", "kr": "Korea", "tw": "Taiwan", "br": "Brazil"}
+GDP_MEASURES = {"gdp_yoy": "real GDP growth, year on year (%)", "gdp_qoq": "real GDP growth, quarter on quarter (%)",
+                "gdp_growth_yearly": "real GDP growth, yearly (%)", "gdp_usd_bn": "GDP (USD billion)",
+                "gdp_per_capita_usd": "GDP per person (USD)"}
+MACRO_LABELS |= {f"{c}_{m}": f"{name} {label}" for c, name in GDP_COUNTRIES.items() for m, label in GDP_MEASURES.items()}
 
 
 def style(fig, height, unified=True):
@@ -110,9 +140,10 @@ def rgba(hex_color, alpha):
     return f"rgba({','.join(str(int(hex_color[i:i + 2], 16)) for i in (1, 3, 5))},{alpha})"
 
 
-def intervals(mean, std, nu, actual=None, height_per=34):
+def intervals(mean, std, nu, actual=None, height_per=34, xrange=None):
     """One forecast distribution per row, first row on top: mean dot, central 68% and 95% ranges
-    of the Student-t forecast, and the actual outcome as a diamond when known."""
+    of the Student-t forecast, and the actual outcome as a diamond when known. Pass xrange to
+    keep the axis (and the zero line) fixed while stepping between charts."""
     T = theme()
     mean = mean[::-1]
     std, nu = std.reindex(mean.index), nu.reindex(mean.index)
@@ -133,7 +164,7 @@ def intervals(mean, std, nu, actual=None, height_per=34):
     style(fig, 90 + height_per * len(y), unified=False)
     fig.update_layout(barmode="overlay", bargap=0.4)
     fig.update_xaxes(tickformat="+.0%", showgrid=True, gridcolor=T["grid"], zeroline=True,
-                     zerolinecolor=T["axis"], zerolinewidth=1)
+                     zerolinecolor=T["axis"], zerolinewidth=1, range=xrange, autorange=xrange is None)
     fig.update_yaxes(showgrid=False, tickfont=dict(color=T["text2"]), categoryorder="array", categoryarray=y)
     return fig
 

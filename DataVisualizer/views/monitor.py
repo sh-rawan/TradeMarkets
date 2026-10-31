@@ -37,7 +37,7 @@ try:
     close = load_close(md.mtime(md.PRICES))
     macro = load_macro(md.mtime(md.MACRO))
 except Exception as e:  # noqa: BLE001
-    st.error(f"No market data in {md.DATA_ROOT} yet ({e}). Run `python run.py data` in BankPrediction.")
+    st.error(f"No market data in {md.DATA_ROOT} yet ({e}). Run `python collect.py` in DataCollector.")
     st.stop()
 
 tickers = load_table(md.TICKERS, md.mtime(md.TICKERS))

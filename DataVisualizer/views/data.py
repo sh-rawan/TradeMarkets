@@ -1,170 +1,253 @@
-"""Data — what is in the MarketData store: every table, its columns, and its rows."""
+"""Market data — every market data table in the store, as charts, one page per country."""
+import math
+
 import duckdb
 import pandas as pd
+import plotly.graph_objects as go
 import streamlit as st
+from plotly.subplots import make_subplots
 
 import marketdata as md
+from charts import MACRO_LABELS, style, theme
 
-LAYERS = {
-    "curated": "Cleaned tables built from the latest download",
-    "features": "Model outputs and other derived data",
-    "raw": "Exactly what each source returned, one folder per download (never modified)",
+FILTER_MAX_DISTINCT = 60  # text columns with fewer distinct values than this filter the chart
+OWN_PAGE = {"fundamentals", "companies"}  # tables shown on a page of their own (Financials)
+# Columns that split a table into one chart panel each, in order of preference.
+PANEL_COLUMNS = ["ticker", "index", "series", "participant", "category"]
+# The value shown first when a table opens (the first one present wins).
+PREFERRED_VALUES = ["adj_close", "close", "value", "net", "future_index_net", "atm_iv"]
+# Order and names in the table picker; tables not listed here follow with their file name.
+NAMES = {"stocks_daily": "Stocks (all NSE)", "etfs_daily": "ETFs", "indices_daily": "NSE indices",
+         "options_daily": "Futures and options by underlying", "futures_daily": "Futures (nearest expiry)",
+         "participant_oi": "Positions by participant (open interest)",
+         "participant_vol": "Trading by participant (volume)", "fiidii_cash": "FII / DII cash market flows",
+         "macro_daily": "Markets and currencies", "rates_daily": "Bond yields and interest rates", "gdp": "GDP",
+         "prices_daily": "Bank Nifty banks (Yahoo)",
+         "stock_tags": "Stock tags", "tickers": "Banks: PSU vs private"}
+TAG_KINDS = {"theme": "Theme", "size": "Size", "sector": "Sector", "market": "Market", "etf": "ETF type",
+             "etf_index": "ETF index"}
+# Which group a big table opens on, and how its panels are ranked when a group has too many.
+DEFAULT_GROUP = {"stocks_daily": "Banks", "options_daily": "Indices", "futures_daily": "Indices", "etfs_daily": "Equity"}
+DEFAULT_INDICES = ["Nifty 50", "Nifty Bank", "Nifty IT", "Nifty Midcap 150", "Nifty Smallcap 250", "India VIX"]
+ACTIVITY = ["value", "fut_oi", "oi", "volume"]
+MAX_PANELS = 24
+PANEL_COLS = 3
+
+# One page per country: {key: page title}. India also gets every NSE table; the others get their
+# series from the tables that mix countries (markets and currencies; bond yields and rates; GDP).
+COUNTRIES = {"india": "India", "us": "US", "europe": "Europe & UK", "japan": "Japan",
+             "china": "China & HK", "emerging": "Korea, Taiwan, Brazil", "global": "Commodities & crypto"}
+MIXED_TABLES = {"macro_daily", "rates_daily", "gdp"}
+COUNTRY_SERIES = {
+    "india": {"banknifty", "nifty", "vix", "usdinr", "eurinr", "in10y"},
+    "us": {"spx", "nasdaq", "usvix", "dxy", "us10y", "us3m", "hy_bonds", "ig_bonds", "treasuries_7_10y", "sofr", "effr"},
+    "europe": {"dax", "ftse", "estr", "sonia"},
+    "japan": {"nikkei", "usdjpy"},
+    "china": {"hangseng", "shanghai", "usdcny"},
+    "emerging": {"kospi", "taiwan", "brazil", "em_etf"},
 }
-FILTER_MAX_DISTINCT = 60  # columns with fewer distinct values than this get a filter
-ROW_LIMITS = [100, 1_000, 10_000, 100_000]
+COUNTRY_PREFIXES = {"in_": "india", "us_": "us", "eu_": "europe", "uk_": "europe", "de_": "europe", "fr_": "europe",
+                    "jp_": "japan", "cn_": "china", "hk_": "china", "kr_": "emerging", "tw_": "emerging", "br_": "emerging"}
+
+
+def country_of(series):
+    """The page a series belongs on; anything not listed (commodities, Bitcoin, new series) goes to global."""
+    for country, names in COUNTRY_SERIES.items():
+        if series in names:
+            return country
+    return next((c for p, c in COUNTRY_PREFIXES.items() if series.startswith(p)), "global")
 
 
 @st.cache_data
-def load_catalog(files):
-    return md.catalog()
+def summarize(path, mtime):
+    return md.sql(f"summarize select * from {md.table(path)}")
 
 
 @st.cache_data
-def summarize(rel, mtime):
-    return md.sql(f"summarize select * from {md.table(md.DATA_ROOT / rel)}")
+def distinct_values(path, mtime, col):
+    return md.sql(f'select distinct "{col}" as v from {md.table(path)} where "{col}" is not null order by 1')["v"].tolist()
 
 
 @st.cache_data
-def distinct_values(rel, mtime, col):
-    return md.sql(f'select distinct "{col}" as v from {md.table(md.DATA_ROOT / rel)} order by 1')["v"].tolist()
+def country_series(path, mtime, country):
+    return [s for s in distinct_values(path, mtime, "series") if country_of(s) == country]
 
 
-def column_config(df):
-    """Show timestamps as plain dates: every table in the store is daily."""
-    return {c: st.column_config.DateColumn(c, format="YYYY-MM-DD")
-            for c in df.columns if pd.api.types.is_datetime64_any_dtype(df[c])}
+@st.cache_data
+def filtered_values(path, mtime, col, where, params):
+    """Distinct values of col among the rows the earlier filters keep."""
+    clause = f"where {' and '.join(where)} and" if where else "where"
+    return duckdb.connect().execute(f'select distinct "{col}" as v from {md.table(path)} {clause} "{col}" is not null '
+                                    f'order by 1', list(params)).df()["v"].tolist()
 
 
-files = md.files()
-if not files:
-    st.title("Data")
-    st.info(f"The store at `{md.DATA_ROOT}` is empty. In BankPrediction run `python run.py data`.")
-    st.stop()
-cat = load_catalog(files)
-mtimes = dict(files)
-
-st.title("Data")
-st.caption(f"Store `{md.DATA_ROOT}` · {len(cat)} tables · {cat['rows'].sum():,} rows · "
-           f"{cat['size_kb'].sum() / 1024:.1f} MB on disk")
-
-# --- Overview: one row per table, grouped by layer -----------------------------------------
-OVERVIEW_CONFIG = {
-    "table": st.column_config.TextColumn("Table", width="medium"),
-    "rows": st.column_config.NumberColumn("Rows", format="localized"),
-    "columns": st.column_config.NumberColumn("Columns"),
-    "size": st.column_config.TextColumn("Size", width="small"),
-    "first_date": st.column_config.DateColumn("From", format="D MMM YYYY"),
-    "last_date": st.column_config.DateColumn("To", format="D MMM YYYY"),
-    "updated": st.column_config.DatetimeColumn("Updated", format="D MMM YYYY, HH:mm"),
-}
+@st.cache_data
+def tag_groups(path, mtime, tags_mtime):
+    """{group: tickers in this table}: every tag, plus 'Indices' for index derivatives."""
+    tags = md.sql(f"select * from {md.table(md.TAGS)}") if md.TAGS.exists() else pd.DataFrame(columns=["ticker", "tag"])
+    have = set(distinct_values(path, mtime, "ticker"))
+    groups = {}
+    if "underlying" in summarize(path, mtime)["column_name"].tolist():
+        groups["Indices"] = md.sql(f"select distinct ticker from {md.table(path)} where underlying = 'index'")["ticker"].tolist()
+    for tag, g in tags.groupby("tag"):
+        members = sorted(set(g["ticker"]) & have)
+        if members:
+            groups[tag] = members
+    return groups
 
 
-def human_size(kb):
-    return f"{kb / 1024:.1f} MB" if kb >= 1024 else f"{kb:.0f} KB"
+@st.cache_data
+def busiest(path, mtime, tickers, col):
+    """Tickers ranked by their activity over the last ~3 months (traded value, open interest...)."""
+    q = (f'select ticker from {md.table(path)} where list_contains(?, ticker) and date >= '
+         f'(select max(date) - interval 90 day from {md.table(path)}) group by 1 order by sum("{col}") desc nulls last')
+    return duckdb.connect().execute(q, [list(tickers)]).df()["ticker"].tolist()
 
 
-for layer in [l for l in LAYERS if l in set(cat["layer"])] + sorted(set(cat["layer"]) - set(LAYERS)):
-    part = cat[cat["layer"] == layer].drop(columns="layer")
-    # The section heading already names the layer, so rows show the path inside it.
-    part = part.assign(table=part["table"].str.removeprefix(f"{layer}/"), size=part["size_kb"].map(human_size))
-    part = part[["table", "rows", "columns", "size", "first_date", "last_date", "updated"]]
-    label = f"{layer} · {len(part)} tables"
-    body = st.expander(f"{label} — {LAYERS.get(layer, '')}", expanded=False) if layer == "raw" else st.container()
-    with body:
-        if layer != "raw":
-            st.markdown(f"##### {label}")
-            st.caption(LAYERS.get(layer, ""))
-        st.dataframe(part, hide_index=True, width="stretch", column_config=OVERVIEW_CONFIG)
+def pretty(col):
+    return MACRO_LABELS.get(col, col.replace("_", " "))
 
-st.divider()
 
-# --- One table in detail ----------------------------------------------------------------------
-names = cat["table"].tolist()
-default = names.index("curated/prices_daily") if "curated/prices_daily" in names else 0
-pick = st.selectbox("Open a table", names, index=default)
-info = cat.set_index("table").loc[pick]
-rel = f"{pick}.parquet"
-mtime = mtimes[rel]
-src = md.table(md.DATA_ROOT / rel)
+def plot(fig):
+    st.plotly_chart(fig, width="stretch", theme=None, config={"displaylogo": False})
 
-m = st.columns(4)
-m[0].metric("Rows", f"{info['rows']:,}", border=True)
-m[1].metric("Columns", int(info["columns"]), border=True)
-# Short values so the cards never truncate; the tooltip carries the exact dates.
-if pd.isna(info["first_date"]):
-    m[2].metric("Years", "—", border=True, help="This table has no date column")
-else:
-    first, last = info["first_date"], info["last_date"]
-    m[2].metric("Years", f"{first:%Y}–{last:%Y}" if first.year != last.year else f"{first:%Y}", border=True,
-                help=f"{first:%d %b %Y} to {last:%d %b %Y}")
-m[3].metric("Updated", f"{info['updated']:%d %b}", border=True, help=f"{info['updated']:%d %b %Y, %H:%M}")
 
-summary = summarize(rel, mtime)
-rows_tab, cols_tab, sql_tab = st.tabs(["Rows", "Columns", "SQL"])
+def bars(labels, values, hover=None):
+    fig = go.Figure(go.Bar(x=values, y=labels, orientation="h", customdata=hover,
+                           marker=dict(color=T["series"][0], cornerradius=4), texttemplate="%{x:,}",
+                           textposition="outside", cliponaxis=False,
+                           hovertemplate="<b>%{x:,}</b> %{y}" + ("<br>%{customdata}" if hover is not None else "")
+                                         + "<extra></extra>"))
+    style(fig, 80 + 28 * len(labels), unified=False)
+    fig.update_layout(bargap=0.3)
+    fig.update_yaxes(showgrid=False, tickfont=dict(color=T["text2"]), autorange="reversed")
+    fig.update_xaxes(showgrid=True, gridcolor=T["grid"])
+    plot(fig)
 
-with rows_tab:
-    # Filters: a date range plus one picker per low-cardinality column (ticker, series, model, horizon...).
+
+def render(country):
+    tables = sorted(p for p in md.CURATED.glob("*.parquet") if p.stem not in OWN_PAGE)
+    # India has every table; other countries only their series in the mixed ones.
+    tables = [p for p in tables if (p.stem not in MIXED_TABLES and country == "india")
+              or (p.stem in MIXED_TABLES and country_series(p, md.mtime(p), country))]
+    if not tables:
+        st.info(f"No market data for {COUNTRIES[country]} in `{md.DATA_ROOT}` yet. Run `python collect.py` in DataCollector.")
+        st.stop()
+    tables.sort(key=lambda p: list(NAMES).index(p.stem) if p.stem in NAMES else len(NAMES))
+    path = tables[0] if len(tables) == 1 else st.selectbox(
+        "Table", tables, format_func=lambda p: NAMES.get(p.stem, p.stem.replace("_", " ")), key=f"table_{country}")
+    page = f"{country}_{path.stem}"
+    mtime = md.mtime(path)
+    src = md.table(path)
+    summary = summarize(path, mtime)
     types = dict(zip(summary["column_name"], summary["column_type"]))
-    pickers = [c for c, t, n in zip(summary["column_name"], summary["column_type"], summary["approx_unique"])
-               if c != "date" and n <= FILTER_MAX_DISTINCT and not t.startswith(("DOUBLE", "FLOAT", "TIMESTAMP"))]
+    uniques = dict(zip(summary["column_name"], summary["approx_unique"]))
+    numeric = [c for c, t in types.items() if t.startswith(("DOUBLE", "FLOAT", "BIGINT", "INTEGER", "DECIMAL", "HUGEINT"))]
+    categorical = [c for c, t in types.items() if c != "date" and uniques[c] <= FILTER_MAX_DISTINCT
+                   and not t.startswith(("DOUBLE", "FLOAT", "TIMESTAMP", "DATE"))]
+
+    if "tag" in types:
+        # The tags table: how many stocks carry each tag, for one kind of tag.
+        kinds = [k for k in TAG_KINDS if k in distinct_values(path, mtime, "kind")]
+        kind = st.selectbox("Tags", kinds, format_func=TAG_KINDS.get, key="tag_kind")
+        data = duckdb.connect().execute(f"select tag, count(*) as n, string_agg(ticker, ', ' order by ticker) as names "
+                                        f"from {src} where kind = ? group by 1 order by 2 desc", [kind]).df()
+        bars(data["tag"], data["n"], [n if len(n) < 300 else n[:300] + "…" for n in data["names"]])
+        st.stop()
+    if "date" not in types:
+        # e.g. tickers: how many banks fall in each group, with their names.
+        label, by = categorical[0], next((c for c in categorical[1:]), categorical[0])
+        data = md.sql(f'select "{by}" as k, count(*) as n, string_agg("{label}", \', \' order by "{label}") as names '
+                      f'from {src} group by 1 order by 2 desc')
+        bars(data["k"], data["n"], data["names"])
+        st.stop()
+
+    # Long/short pairs (FII index futures long and short...) also get their net position.
+    nets = {c[:-5] + "_net": c[:-5] for c in types if c.endswith("_long") and c[:-5] + "_short" in types}
+    values = [c for c in numeric if c not in categorical] + list(nets)
+    values = sorted(values, key=lambda c: next((i for i, p in enumerate(PREFERRED_VALUES) if p == c), 99))
+    panel = next((c for c in PANEL_COLUMNS if c in types), None)
+    others = [c for c in categorical if c not in (panel, "underlying", "series")]
+
+    c1, c2, c3 = st.columns([1, 1, 2])
+    value = c1.selectbox("Value", values, format_func=pretty, key=f"value_{page}")
+    options = distinct_values(path, mtime, panel) if panel else []
+    if panel == "series":
+        options = country_series(path, mtime, country)
+    default = []
+    if panel == "ticker" and len(options) > MAX_PANELS:
+        # Too many to draw at once: pick a group (tag), then the busiest names in it.
+        groups = tag_groups(path, mtime, md.mtime(md.TAGS))
+        names = ["All"] + sorted(groups, key=str.lower)
+        start = DEFAULT_GROUP.get(path.stem, "All")
+        group = c2.selectbox("Group", names, index=names.index(start) if start in names else 0, key=f"group_{page}")
+        options = options if group == "All" else groups[group]
+        act = next((c for c in ACTIVITY if c in types), None)
+        default = (busiest(path, mtime, tuple(options), act) if act else options)[:MAX_PANELS]
+    elif panel == "index" and len(options) > MAX_PANELS:
+        default = [i for i in DEFAULT_INDICES if i in options]
+    if panel:
+        chosen = c3.multiselect(f"Show only these ({pretty(panel)})", options, placeholder=f"All {len(options)}",
+                                default=[d for d in default if d in options] if default else None,
+                                format_func=lambda v: MACRO_LABELS.get(v, v), key=f"panels_{page}_{len(options)}")
+        shown = chosen or default or options
     where, params = [], []
-    widgets = st.columns(min(4, len(pickers) + ("date" in types) + 1))
-    i = 0
-    if "date" in types:
-        lo, hi = info["first_date"].date(), info["last_date"].date()
-        span = widgets[i].date_input("Dates", (lo, hi), min_value=lo, max_value=hi, key=f"dates_{pick}")
-        if len(span) == 2:
-            where.append('"date" between ? and ?')
-            params += [pd.Timestamp(span[0]), pd.Timestamp(span[1]) + pd.Timedelta(days=1) - pd.Timedelta(1)]
-        i += 1
-    for col in pickers:
-        chosen = widgets[i % len(widgets)].multiselect(col, distinct_values(rel, mtime, col),
-                                                       placeholder="All", key=f"f_{pick}_{col}")
-        if chosen:
-            where.append(f'list_contains(?, "{col}")')
-            params.append(chosen)
-        i += 1
-    limit = widgets[i % len(widgets)].selectbox("Show up to", ROW_LIMITS, index=1, format_func="{:,} rows".format,
-                                               key=f"limit_{pick}")
+    for col in others:
+        opts = filtered_values(path, mtime, col, tuple(where), tuple(params))
+        where.append(f'"{col}" = ?')
+        # The key follows the earlier filters, so a choice that no longer exists starts over.
+        params.append(st.selectbox(pretty(col).capitalize(), opts, format_func=lambda v: pretty(str(v)).capitalize(), key=f"f_{page}_{col}_{hash(tuple(params))}"))
+    lo, hi = (d.date() for d in md.sql(f"select min(date), max(date) from {src}").iloc[0])
+    one_day = lo == hi
+    if not one_day:
+        span = st.slider("Dates", lo, hi, (lo, hi), format="MMM YYYY", key=f"span_{page}")
+        where.append('"date" between ? and ?')
+        params += [pd.Timestamp(span[0]), pd.Timestamp(span[1])]
+    if panel:
+        where.append(f'list_contains(?, "{panel}")')
+        params.append(list(shown))
 
+    expr = f'("{nets[value]}_long" - "{nets[value]}_short")' if value in nets else f'"{value}"'
+    cols = ['"date"', f"{expr} as v"] + ([f'"{panel}" as p'] if panel else [])
     clause = f"where {' and '.join(where)}" if where else ""
-    order = 'order by "date" desc' if "date" in types else ""
-    con = duckdb.connect()
-    total = con.execute(f"select count(*) from {src} {clause}", params).fetchall()[0][0]
-    df = con.execute(f"select * from {src} {clause} {order} limit {limit}", params).df()
-    st.caption(f"Showing **{len(df):,}** of **{total:,}** matching rows"
-               + (" (newest first)" if order else ""))
-    st.dataframe(df, hide_index=True, width="stretch", height=560, column_config=column_config(df))
-    if total:
-        st.download_button(f"Download {total:,} rows as CSV",
-                           con.execute(f"select * from {src} {clause} {order}", params).df()
-                           .to_csv(index=False).encode(),
-                           file_name=f"{pick.replace('/', '_')}.csv", mime="text/csv")
+    # Futures: one line per underlying, following the nearest expiry.
+    nearest = ('qualify row_number() over (partition by ticker, date order by expiry) = 1' if "expiry" in types else "")
+    data = duckdb.connect().execute(f"select {', '.join(cols)} from {src} {clause} {nearest} order by date", params).df()
 
-with cols_tab:
-    cols = summary[["column_name", "column_type", "min", "max", "approx_unique", "null_percentage"]].copy()
-    cols["null_percentage"] = pd.to_numeric(cols["null_percentage"], errors="coerce")
-    # SUMMARIZE returns min/max as text: drop midnight times from dates and round long floats.
-    for c in ["min", "max"]:
-        cols[c] = [v.removesuffix(" 00:00:00") if t.startswith("TIMESTAMP")
-                   else f"{float(v):,.6g}" if t.startswith(("DOUBLE", "FLOAT")) and v is not None else v
-                   for v, t in zip(cols[c], cols["column_type"])]
-    st.dataframe(cols, hide_index=True, width="stretch", column_config={
-        "column_name": "Column", "column_type": "Type", "min": "Min", "max": "Max",
-        "approx_unique": st.column_config.NumberColumn("Distinct (approx.)", format="localized"),
-        "null_percentage": st.column_config.NumberColumn("Missing", format="%.1f%%"),
-    })
+    if data.empty:
+        st.info("Nothing for these choices.")
+    elif one_day:
+        # A single date so far (e.g. FII / DII cash flows): one bar per row; it becomes lines as days are added.
+        keys = data["p"].astype(str) if panel else pd.Series([pretty(value)] * len(data))
+        fig = go.Figure(go.Bar(x=data["v"], y=keys, orientation="h",
+                               marker=dict(color=[T["pos"] if v >= 0 else T["neg"] for v in data["v"]], cornerradius=4),
+                               texttemplate="%{x:,.4~g}", textposition="outside", cliponaxis=False,
+                               hovertemplate="<b>%{x:,.4~g}</b> %{y}<extra></extra>"))
+        style(fig, 90 + 50 * len(data), unified=False)
+        fig.update_layout(bargap=0.4, title=dict(text=f"{lo:%d %b %Y}", font=dict(size=13, color=T["text2"])))
+        fig.update_xaxes(showgrid=True, gridcolor=T["grid"], zeroline=True, zerolinecolor=T["axis"])
+        fig.update_yaxes(showgrid=False, tickfont=dict(color=T["text2"]))
+        plot(fig)
+    else:
+        # One panel per stock / index / series / participant, each on its own scale, in the order chosen.
+        groups = dict(list(data.groupby("p", sort=False))) if panel else {pretty(value): data}
+        order = [k for k in shown if k in groups] if panel else list(groups)
+        n_rows, n_cols = math.ceil(len(order) / PANEL_COLS), min(len(order), PANEL_COLS)
+        fig = make_subplots(rows=n_rows, cols=n_cols, shared_xaxes=True, vertical_spacing=75 / (230 * n_rows),
+                            horizontal_spacing=0.07, subplot_titles=[MACRO_LABELS.get(str(k), str(k)) for k in order])
+        for i, k in enumerate(order):
+            g = groups[k]
+            fig.add_trace(go.Scatter(x=g["date"], y=g["v"], mode="lines", name=pretty(value), showlegend=False,
+                                     line=dict(color=T["series"][0], width=1.5),
+                                     hovertemplate="<b>%{y:,.4~g}</b><extra></extra>"),
+                          row=i // n_cols + 1, col=i % n_cols + 1)
+        style(fig, 60 + (230 if n_rows > 1 else 380) * n_rows)
+        fig.update_annotations(font=dict(size=13, color=T["text"]))
+        fig.update_xaxes(showticklabels=True)
+        plot(fig)
 
-with sql_tab:
-    con = md.connect()
-    st.caption("Views: " + ", ".join(f"`{v}`" for v in md.views_available(con))
-               + ". Any file also works as `read_parquet('path')`.")
-    q = st.text_area("Query", height=140, key=f"sql_{pick}",
-                     value=f"select *\nfrom {src}\nlimit 100")
-    if st.button("Run", type="primary"):
-        try:
-            out = con.sql(q).df()
-            st.caption(f"{len(out):,} rows")
-            st.dataframe(out, hide_index=True, width="stretch", column_config=column_config(out))
-        except Exception as e:  # noqa: BLE001
-            st.error(str(e))
+
+T = theme()
+st.title("Market data")
+render(st.segmented_control("Country", list(COUNTRIES), format_func=COUNTRIES.get, default="india",
+                            key="country") or "india")

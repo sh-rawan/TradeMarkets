@@ -72,6 +72,18 @@ def feature_panel():
         m[f"usdinr_ret_{k}"] = np.log(macro["usdinr"] / macro["usdinr"].shift(k))
         if "in10y" in macro:
             m[f"in10y_chg_{k}"] = macro["in10y"] - macro["in10y"].shift(k)
+    # Global: US stocks and fear (the Indian open follows the US close), the dollar, oil (India's
+    # biggest import: rupee, inflation, RBI), gold (risk-off), and the US curve slope (rate expectations).
+    for k in [1, 5, 20]:
+        m[f"spx_ret_{k}"] = np.log(macro["spx"] / macro["spx"].shift(k))
+        m[f"brent_ret_{k}"] = np.log(macro["brent"] / macro["brent"].shift(k))
+    for k in [5, 20]:
+        m[f"dxy_ret_{k}"] = np.log(macro["dxy"] / macro["dxy"].shift(k))
+        m[f"gold_ret_{k}"] = np.log(macro["gold"] / macro["gold"].shift(k))
+    m["usvix"] = macro["usvix"]
+    m["usvix_chg_5"] = macro["usvix"] - macro["usvix"].shift(5)
+    m["us_slope"] = macro["us10y"] - macro["us3m"]
+    m["us_slope_chg_20"] = m["us_slope"] - m["us_slope"].shift(20)
     panel.index.names = ["date", "ticker"]
     panel = panel.join(m.rename_axis("date"), on="date")
     if OPTIONS_TABLE.exists():

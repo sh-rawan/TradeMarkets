@@ -1,6 +1,5 @@
 """Bank Nifty short-horizon signal stack.
 
-    python run.py data                                  # download prices + macro from Yahoo
     python run.py signals --models historical,egarch    # forecast mean + std on rebalance dates
     python run.py evaluate                              # walk-forward scores vs the historical benchmark
     python run.py today                                 # forecasts for the latest close
@@ -15,7 +14,7 @@ warnings.filterwarnings("ignore", module="yfinance")
 import signals
 from config import (BENCHMARK, ENSEMBLE_WEIGHTS_TABLE, ENTRY_LAG, EVALUATION_TABLE, FORECASTS_DIR, HORIZONS,
                     MODEL_RAM_GB, MODELS, OUTCOMES_TABLE, PSU_BANKS, REPORT_DIR)
-from data import calendar, download_all, forward_returns, rebalance_dates
+from data import calendar, forward_returns, rebalance_dates
 from ensemble import calibrate, combine, crps_t, known_at, long_short, summarise, wide
 from memlimit import limit_ram
 from store import write
@@ -138,7 +137,6 @@ def cmd_today(args):
 def main():
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = p.add_subparsers(dest="cmd", required=True)
-    sub.add_parser("data")
     s = sub.add_parser("signals")
     s.add_argument("--models", default="historical,reversal,resid_reversal,egarch")
     s.add_argument("--start", default=None)
@@ -151,9 +149,7 @@ def main():
 
     if limit_ram(MODEL_RAM_GB):
         print(f"RAM capped at {MODEL_RAM_GB:g} GB")
-    if args.cmd == "data":
-        download_all()
-    elif args.cmd == "signals":
+    if args.cmd == "signals":
         from config import EVAL_START, STEP
         args.start, args.step = args.start or EVAL_START, args.step or STEP
         cmd_signals(args)

@@ -24,7 +24,7 @@ of outcomes land within ±1 std and 95% within ±2.
 forecast is treated as a **Student-t** distribution. Before scoring, each model is recalibrated
 on its own past errors (only outcomes known by the forecast date): a width multiplier for its std
 dev and a tail parameter ν (lower = fatter tails). The calibrated forecasts are published to
-`MarketData/features/forecasts/` with columns `mean, std, nu`.
+`output/forecasts/` with columns `mean, std, nu`.
 
 The **ensemble** mixes the calibrated distributions. Each model is weighted by how much it beat the
 historical benchmark (lower CRPS) over its last 24 forecasts with known outcomes; a model that
@@ -48,17 +48,27 @@ git clone https://github.com/shiyu-coder/Kronos vendor/Kronos
 ## Data store
 
 Market data lives outside the repo (and outside OneDrive) in `C:\Users\<you>\MarketData`.
-To use another folder, set the `MARKETDATA_ROOT` environment variable.
+[DataCollector](../DataCollector) downloads it; this project only reads it. To use another
+folder, set the `MARKETDATA_ROOT` environment variable. The store holds market data only; this
+project's own outputs go to `output/` (see below). Tables used here:
 
 ```
-MarketData/
-  raw/yahoo/daily/fetched=YYYY-MM-DD/<symbol>.parquet   # every download, never modified
-  curated/prices_daily.parquet                          # date, ticker, open, high, low, close, volume
-  curated/macro_daily.parquet                           # date, series, value
-  features/signals/<model>.parquet                      # raw model output: date, ticker, horizon, mean, std
-  features/forecasts/<model>.parquet                    # Student-t calibrated, + ensemble: ... mean, std, nu
-  features/outcomes.parquet                             # what actually happened after each signal date
-  manual/india_10y.csv                                  # optional, date,yield
+MarketData/curated/
+  prices_daily.parquet                          # the 12 banks from Yahoo: date, ticker, open, high, low, close, volume
+  macro_daily.parquet                           # date, series, value
+  options_daily.parquet, participant_*.parquet  # NSE futures/options per underlying and FII/DII/Pro/Client positioning
+MarketData/manual/india_10y.csv                 # optional, date,yield
+```
+
+Model outputs live in this project's `output/` folder (git-ignored, re-created by `run.py`; set
+`BANKPREDICTION_OUTPUT` to move it):
+
+```
+output/
+  signals/<model>.parquet                # raw model output: date, ticker, horizon, mean, std (the cache)
+  forecasts/<model>.parquet              # Student-t calibrated, + ensemble: ... mean, std, nu
+  outcomes.parquet                       # what actually happened after each signal date
+  evaluation.parquet, ensemble_weights.parquet
 ```
 
 Query any of it with DuckDB:
@@ -68,23 +78,20 @@ import duckdb
 duckdb.sql("select ticker, max(close) from 'C:/Users/agraw/MarketData/curated/prices_daily.parquet' group by ticker").df()
 ```
 
-`python run.py data` saves a new raw snapshot and rebuilds `curated/`. Each snapshot is the
-full history (~3 MB), so old ones can be deleted whenever you like.
-
 Optional: put daily India 10Y G-sec yields in `manual/india_10y.csv` (`date,yield`) from
 RBI DBIE / FBIL. Yahoo has no reliable daily India 10Y series.
 
 ## Run
 
 ```powershell
-python run.py data                                            # ~1 min
+python ..\DataCollector\collect.py                            # update the market data first
 python run.py signals --models historical,reversal,resid_reversal,egarch
 python run.py signals --models chronos,kronos                 # GPU, slower
 python run.py evaluate                                        # reports/evaluation.csv
 python run.py today                                           # ranking for the latest close
 ```
 
-Signals are cached in `MarketData/features/signals/`, so re-runs only compute new dates.
+Signals are cached in `output/signals/`, so re-runs only compute new dates.
 
 `run.py` caps its physical RAM at 6 GB (`MODEL_RAM_GB` in `config.py`). Beyond the cap,
 Windows moves pages to disk, so a run slows down instead of crashing. Use
@@ -94,8 +101,9 @@ Windows moves pages to disk, so a run slows down instead of crashing. Use
 ## Visualization
 
 Charts live in the separate [DataVisualizer](../DataVisualizer) app, which reads the
-MarketData store and never imports this project's code. `run.py evaluate` and `run.py today`
-publish the ensemble scores, weights, evaluation and realised outcomes to `MarketData/features/` for it. The defaults in
+MarketData store and this project's `output/` folder, and never imports this project's code.
+`run.py evaluate` and `run.py today` publish the ensemble scores, weights, evaluation and realised
+outcomes to `output/` for it. The defaults in
 `config.py` are evaluation from 2023-01-01 with a rebalance every 5 trading days.
 
 ## Reading the evaluation
